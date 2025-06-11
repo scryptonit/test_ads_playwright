@@ -1,82 +1,69 @@
-import math
-from patchright.sync_api import sync_playwright
-from adspower_api_utils import start_browser, close_browser
-import time
-import random
-import os
+import json
+import requests
 
-###########################################################################################
-DISPOSABLE = True
-disp_N = 10 # number of disposable profiles
-T = 15 # seconds delay
-###########################################################################################
-
-def load_profiles(file_name="profiles.txt"):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, file_name)
-    with open(file_path, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
-
-def click_random(locator, manual_radius: float = None):
-    time.sleep(random.uniform(1,2))
-    locator.wait_for(state='visible', timeout=50000)
-    box = locator.bounding_box()
-    if box is None:
-        raise Exception("Bounding box not found")
-    width, height = box["width"], box["height"]
-    cx, cy = width / 2, height / 2
-    radius = manual_radius if manual_radius is not None else min(width, height) / 2
-    angle = random.uniform(0, 2 * math.pi)
-    r = radius * math.sqrt(random.uniform(0, 1))
-    rand_x = cx + r * math.cos(angle)
-    rand_y = cy + r * math.sin(angle)
-
-    locator.click(position={"x": rand_x, "y": rand_y})
+API_URL = 'http://localhost:50326'
 
 
-def activity(profile_number):
+def start_browser(profile_number):
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-popup-blocking",
+        "--disable-default-apps"
+    ]
+
+    params = {
+        'serial_number': profile_number,
+        'launch_args': json.dumps(launch_args),
+        'open_tabs': 1
+    }
+
     try:
-        puppeteer_ws = start_browser(profile_number)
-        if not puppeteer_ws:
-            print(f"Failed to launch browser for profile {profile_number}.")
-            return
+        response = requests.get(f'{API_URL}/api/v1/browser/start', params=params)
+        print(f"Raw response: {response.text}")
+        response.raise_for_status()
+        data = response.json()
+        if data.get("code") == 0:
+            puppeteer_ws = data["data"]["ws"]["puppeteer"]
+            print(f"Browser started successfully for profile {profile_number}.")
+            return puppeteer_ws
+        else:
+            print(f"Failed to start browser for profile {profile_number}: {data['msg']}")
+            return None
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(puppeteer_ws, slow_mo=random.randint(2000, 3000))
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
+    except requests.exceptions.RequestException as e:
+        print(f"Request error while starting browser: {e}")
+        return None
 
-            context.add_init_script("""
-                            Object.defineProperty(window, 'navigator', {
-                                value: new Proxy(navigator, {
-                                    has: (target, key) => key === 'webdriver' ? false : key in target,
-                                    get: (target, key) =>
-                                        key === 'webdriver' ? undefined : typeof target[key] === 'function' ? target[key].bind(target) : target[key]
-                                })
-                            });
-                        """)
+def check_browser_status(profile_number):
+    try:
+        response = requests.get(f'{API_URL}/api/v1/browser/active', params={'serial_number': profile_number})
+        print(f"Raw response: {response.text}")
+        response.raise_for_status()
+        data = response.json()
+        if data.get("code") == 0 and data["data"]["status"] == "Active":
+            print(f"Browser is active for profile {profile_number}.")
+            return True
+        else:
+            print(f"Browser is NOT active for profile {profile_number}.")
+            return False
 
-            page = context.new_page()
-            ###########################################################################################
-            page.goto("https://bot.sannysoft.com/")
-            page.wait_for_load_state("load")
+    except requests.exceptions.RequestException as e:
+        print(f"Request error while checking browser status: {e}")
+        return False
 
-            ###########################################################################################
-            browser.close()
-            time.sleep(random.uniform(T * 0.85, T * 1.15))
+def close_browser(profile_number):
+    try:
+        response = requests.get(f'{API_URL}/api/v1/browser/stop', params={'serial_number': profile_number})
+        print(f"Raw response: {response.text}")
+        response.raise_for_status()
+        data = response.json()
+        if data.get("code") == 0:
+            print(f"Browser closed successfully for profile {profile_number}.")
+            return True
+        else:
+            print(f"Failed to close browser for profile {profile_number}: {data['msg']}")
+            return False
 
-
-
-    except Exception as e:
-        print(f"error for profile {profile_number}: {e}")
-
-    finally:
-        close_browser(profile_number)
-
-
-if __name__ == "__main__":
-    if DISPOSABLE:
-        profiles = ['5'] * disp_N
-    else:
-        profiles = load_profiles("profiles.txt")
-    for profile in profiles:
-        activity(profile)
+    except requests.exceptions.RequestException as e:
+        print(f"Request error while closing browser: {e}")
+        return False
