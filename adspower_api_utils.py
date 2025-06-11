@@ -1,7 +1,7 @@
 import json
 import requests
 
-API_URL = 'http://localhost:50326'
+API_URL = 'http://localhost:50325'
 
 
 def start_browser(profile_number):
